@@ -4,12 +4,12 @@ Ein einfaches, aber leistungsstarkes Desktop-Tool zur Visualisierung von Fotos m
 
 ## **Download**
 
-Die neueste, kompilierte Version für Windows kann direkt von der [**Releases-Seite**](https://www.google.com/search?q=https://github.com/niederwe75/Photo-Map-Tool/releases/latest) heruntergeladen werden.
+Die neueste, kompilierte Version für Windows kann direkt von der [**Releases-Seite**](https://github.com/niederwe75/Photo-Map-Tool/releases/latest) heruntergeladen werden.
 
 ## **Features**
 
 * **Automatische GPS-Extraktion:** Liest Breiten- und Längengrade direkt aus den EXIF-Daten von .jpg, .jpeg, .tiff, .heic und weiteren Formaten.  
-* **Geolokalisierung:** Wandelt GPS-Koordinaten mithilfe der [Nominatim API (OpenStreetMap)](https://www.google.com/search?q=https://nominatim.openstreetmap.org/) in lesbare Ortsnamen (Land, Stadt) um.  
+* **Geolokalisierung:** Wandelt GPS-Koordinaten mithilfe der [Nominatim API (OpenStreetMap)](https://nominatim.openstreetmap.org/) in lesbare Ortsnamen (Land, Stadt) um.  
 * **Interaktive Karte:** Zeigt Fotos als klickbare Cluster auf einer Karte an. Ein Klick auf einen Cluster enthüllt die enthaltenen Fotos.  
 * **Effizientes Caching:**  
   * Ein intelligentes Zwei-Ebenen-Cache-System verhindert unnötige Analysen und API-Abfragen.  
@@ -21,7 +21,7 @@ Die neueste, kompilierte Version für Windows kann direkt von der [**Releases-Se
 
 ## **Anleitung**
 
-1. **Anwendung starten:** Lade die .zip-Datei von der [Releases-Seite](https://www.google.com/search?q=https://github.com/niederwe75/Photo-Map-Tool/releases/latest) herunter, entpacke sie und führe die Photo Map Tool.exe aus.  
+1. **Anwendung starten:** Lade die .zip-Datei von der [Releases-Seite](https://github.com/niederwe75/Photo-Map-Tool/releases/latest) herunter, entpacke sie und führe die Photo Map Tool.exe aus.  
 2. **Hauptordner laden:** Gehe im Menü auf Datei \-\> Foto-Hauptordner laden... und wähle das Hauptverzeichnis aus, das deine Foto-Unterordner enthält.  
 3. **Analyse (optional):** Das Tool erkennt automatisch Ordner, die noch nicht analysiert wurden, und fragt, ob es dies tun soll. Alternativ kann eine manuelle Analyse über Datei \-\> Unterordner analysieren... gestartet werden.  
 4. **Ordner auswählen:** Wähle auf der linken Seite einen der gefundenen Unterordner aus. Die Karte wird automatisch mit den Clustern dieses Ordners aktualisiert.  
@@ -75,3 +75,5 @@ Unter Extras \-\> Einstellungen... können folgende Parameter angepasst werden:
 * **Gesamt-Cache neu erstellen:** Diese Menüfunktion löscht nur die .parquet- und .json-Dateien und zwingt das Programm, die Daten aus den vorhandenen .csv-Dateien neu zusammenzusetzen. Nützlich, wenn Ordner manuell gelöscht wurden.
 
 ## **Lizenz**
+
+Dieses Projekt steht unter der GNU General Public License v3.0. Siehe die LICENSE-Datei für weitere Details.
