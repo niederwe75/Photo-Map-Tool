@@ -22,28 +22,22 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget,
                              QSpinBox, QLineEdit, QDialogButtonBox, QComboBox)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
-from PyQt6.QtCore import QUrl, Qt, QSettings, QCoreApplication
+from PyQt6.QtCore import QUrl, Qt, QSettings, QCoreApplication, QTimer
 from PyQt6.QtGui import QPixmap, QImage, QAction
 from PIL import Image, ImageOps, ExifTags
 
-# --- Konstanten & Versionierung ---
-APP_VERSION = "2.1.8"
+APP_VERSION = "2.1.9"
 SUPPORTED_EXTENSIONS = ('.jpg', '.jpeg', '.tif', '.tiff', '.heic', '.heif')
 CSV_CACHE_FILENAME = ".exif_tool_cache.csv"
 APP_CACHE_FILENAME = "combined_geodata.parquet"
 MANIFEST_FILENAME = "cache_manifest.json"
 CSV_FIELDNAMES = ['filepath', 'latitude', 'longitude', 'country', 'city', 'datetime_original']
 
-
-# --- Logging-Konfiguration ---
 def setup_logging():
-    """Konfiguriert das Logging, um Fehler in eine Datei zu schreiben."""
     base_path = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else sys.argv[0])
     log_file = os.path.join(base_path, 'error.log')
-    
-    if os.path.exists(log_file) and os.path.getsize(log_file) > 1024 * 1024: # 1 MB
+    if os.path.exists(log_file) and os.path.getsize(log_file) > 1024 * 1024:
         os.rename(log_file, log_file + '.old')
-
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(levelname)s - In %(funcName)s: %(message)s',
@@ -60,15 +54,11 @@ def setup_logging():
     root_logger.addHandler(handler)
     root_logger.setLevel(logging.DEBUG)
 
-
 def uncaught_exception_handler(exc_type, exc_value, exc_traceback):
-    """Fängt unbehandelte Ausnahmen ab, loggt sie und zeigt eine Meldung an."""
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    
     logging.critical("Unbehandelte Ausnahme aufgetreten!", exc_info=(exc_type, exc_value, exc_traceback))
-    
     error_message = (
         "Ein unerwarteter Fehler ist aufgetreten und das Programm muss beendet werden.\n\n"
         f"Bitte überprüfen Sie die Datei 'error.log' im Programmverzeichnis für technische Details.\n\n"
@@ -76,8 +66,6 @@ def uncaught_exception_handler(exc_type, exc_value, exc_traceback):
     )
     QMessageBox.critical(None, "Kritischer Fehler", error_message)
 
-
-# --- Hilfsfunktionen ---
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371000
     phi1, phi2 = radians(lat1), radians(lat2)
@@ -93,14 +81,12 @@ def extract_exif_data(image_path):
         exif_data = img._getexif()
         if not exif_data:
             return {'lat': None, 'lon': None, 'datetime': None}
-
         datetime_original = None
         for tag, value in exif_data.items():
             decoded = ExifTags.TAGS.get(tag, tag)
             if decoded == "DateTimeOriginal":
                 datetime_original = value
                 break
-
         gps_info = {}
         for tag, value in exif_data.items():
             decoded = ExifTags.TAGS.get(tag, tag)
@@ -109,7 +95,6 @@ def extract_exif_data(image_path):
                     sub_decoded = ExifTags.GPSTAGS.get(t, t)
                     gps_info[sub_decoded] = value[t]
                 break
-        
         lat, lon = None, None
         if all(k in gps_info for k in ['GPSLatitude', 'GPSLatitudeRef', 'GPSLongitude', 'GPSLongitudeRef']):
             def convert_dms_to_decimal(dms, ref):
@@ -119,7 +104,6 @@ def extract_exif_data(image_path):
                 return dec
             lat = convert_dms_to_decimal(gps_info['GPSLatitude'], gps_info['GPSLatitudeRef'])
             lon = convert_dms_to_decimal(gps_info['GPSLongitude'], gps_info['GPSLongitudeRef'])
-        
         return {'lat': lat, 'lon': lon, 'datetime': datetime_original}
     except Exception as e:
         logging.warning(f"Konnte EXIF-Daten für {image_path} nicht lesen: {e}")
@@ -147,25 +131,71 @@ def fetch_location_from_nominatim(latitude, longitude, user_agent):
         logging.error(f"Fehler bei Nominatim-Anfrage für {latitude},{longitude}: {e}")
     return country, city
 
+def find_csv_targets(folder):
+    """
+    Gibt alle Ordner zurück, in denen eine CSV angelegt werden muss.
+    Die Logik ist:
+    - Wenn ein Ordner direkt Bilder enthält: CSV für diese Bilder in diesem Ordner.
+    - Wenn ein Ordner keine Bilder, aber nur Unterordner hat und alle Unterordner sind "leaf-image"-Ordner (enthalten direkt Bilder, aber keine weiteren Unterordner): CSV in diesem Ordner, enthält alle Bilder aus den Unterordnern.
+    - Wenn ein Ordner komplexer verschachtelt ist, rekursiv in die Unterordner gehen.
+    """
+    targets = []
+    files = os.listdir(folder)
+    image_files = [f for f in files if os.path.isfile(os.path.join(folder, f)) and f.lower().endswith(SUPPORTED_EXTENSIONS)]
+    subfolders = [os.path.join(folder, f) for f in files if os.path.isdir(os.path.join(folder, f))]
+    if image_files:
+        targets.append((folder, "self"))
+    elif subfolders:
+        # Prüfe, ob alle Subfolder Blattordner mit Bildern sind
+        all_subs_are_leaf_with_images = all(
+            any(os.path.isfile(os.path.join(sub, f)) and f.lower().endswith(SUPPORTED_EXTENSIONS)
+                for f in os.listdir(sub)) and
+            not any(os.path.isdir(os.path.join(sub, f)) for f in os.listdir(sub))
+            for sub in subfolders
+        )
+        if all_subs_are_leaf_with_images and subfolders:
+            targets.append((folder, "children"))
+        else:
+            for sub in subfolders:
+                targets.extend(find_csv_targets(sub))
+    return targets
+
+def get_images_for_csv(folder, mode):
+    """
+    Gibt alle Bilder zurück die für die CSV in 'folder' einzutragen sind.
+    Wenn mode="self": alle Bilder direkt in folder.
+    Wenn mode="children": alle Bilder aus allen direkten Unterordnern (relativ zu folder).
+    """
+    imglist = []
+    if mode == "self":
+        for f in os.listdir(folder):
+            if os.path.isfile(os.path.join(folder, f)) and f.lower().endswith(SUPPORTED_EXTENSIONS):
+                imglist.append((f, os.path.join(folder, f)))
+    elif mode == "children":
+        for child in os.listdir(folder):
+            child_path = os.path.join(folder, child)
+            if os.path.isdir(child_path):
+                for f in os.listdir(child_path):
+                    if os.path.isfile(os.path.join(child_path, f)) and f.lower().endswith(SUPPORTED_EXTENSIONS):
+                        rel_path = os.path.join(child, f)
+                        imglist.append((rel_path, os.path.join(child_path, f)))
+    return imglist
+
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Einstellungen")
         layout = QFormLayout(self)
-        
         self.grouping_mode = QComboBox()
         self.grouping_mode.addItems(["Ordner", "Jahr", "Jahr & Monat"])
         layout.addRow("Gruppieren nach:", self.grouping_mode)
-
         self.cluster_distance = QSpinBox()
         self.cluster_distance.setRange(50, 10000)
         self.cluster_distance.setSingleStep(50)
         self.cluster_distance.setSuffix(" m")
         layout.addRow("Cluster-Distanz:", self.cluster_distance)
-        
         self.user_agent = QLineEdit()
         layout.addRow("Nominatim User-Agent:", self.user_agent)
-        
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
@@ -175,7 +205,6 @@ class CustomWebEnginePage(QWebEnginePage):
     def __init__(self, parent_window=None):
         super().__init__(parent_window)
         self._main_window = parent_window
-
     def acceptNavigationRequest(self, url, _type, isMainFrame):
         if url.scheme() == 'app' and url.host() == 'show_cluster' and 'id' in parse_qs(url.query()):
             cluster_id = parse_qs(url.query())['id'][0]
@@ -188,15 +217,12 @@ class PhotoMapApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self._load_settings()
-
         self.setWindowTitle(f"Photo Map Viewer v{APP_VERSION}")
         self.setGeometry(100, 100, 1600, 900)
-
         self.photo_root_path = None
         self.clusters_data = []
         self.master_df = pd.DataFrame()
         self.nominatim_api_cache = {}
-
         self._create_menu_bar()
         self._create_ui()
         self._load_window_state()
@@ -225,24 +251,19 @@ class PhotoMapApp(QMainWindow):
     def _create_menu_bar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("Datei")
-        
         load_root_action = QAction("Foto-Hauptordner laden...", self)
         load_root_action.triggered.connect(self.select_and_load_root_folder)
         file_menu.addAction(load_root_action)
-
         analyze_action = QAction("Unterordner analysieren...", self)
         analyze_action.triggered.connect(self.run_manual_exif_analysis)
         file_menu.addAction(analyze_action)
-        
         rebuild_cache_action = QAction("Gesamt-Cache neu erstellen", self)
         rebuild_cache_action.triggered.connect(self.force_rebuild_cache)
         file_menu.addAction(rebuild_cache_action)
-
         file_menu.addSeparator()
         exit_action = QAction("Beenden", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-
         tools_menu = menu_bar.addMenu("Extras")
         settings_action = QAction("Einstellungen...", self)
         settings_action.triggered.connect(self.open_settings_dialog)
@@ -252,9 +273,7 @@ class PhotoMapApp(QMainWindow):
         self.main_widget = QWidget()
         self.setCentralWidget(self.main_widget)
         top_layout = QVBoxLayout(self.main_widget)
-        
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
         self.folder_sidebar = QWidget()
         folder_layout = QVBoxLayout(self.folder_sidebar)
         self.folder_label = QLabel("Gruppierte Ansicht:")
@@ -270,11 +289,9 @@ class PhotoMapApp(QMainWindow):
         folder_layout.addWidget(self.folder_label)
         folder_layout.addWidget(self.scroll_area)
         self.main_splitter.addWidget(self.folder_sidebar)
-        
         self.web_view = QWebEngineView()
         self.web_view.setPage(CustomWebEnginePage(self))
         self.main_splitter.addWidget(self.web_view)
-
         self.photo_sidebar = QWidget()
         photo_sidebar_layout = QVBoxLayout(self.photo_sidebar)
         self.sidebar_label = QLabel()
@@ -291,8 +308,9 @@ class PhotoMapApp(QMainWindow):
         photo_sidebar_layout.setStretchFactor(self.photo_list_widget, 1)
         photo_sidebar_layout.setStretchFactor(self.preview_label, 1)
         self.main_splitter.addWidget(self.photo_sidebar)
-        
-        self.main_splitter.setStretchFactor(0, 1); self.main_splitter.setStretchFactor(1, 4); self.main_splitter.setStretchFactor(2, 2)
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 4)
+        self.main_splitter.setStretchFactor(2, 2)
         top_layout.addWidget(self.main_splitter)
 
     def open_settings_dialog(self):
@@ -300,7 +318,6 @@ class PhotoMapApp(QMainWindow):
         dialog.grouping_mode.setCurrentText(self.grouping_mode)
         dialog.cluster_distance.setValue(self.cluster_distance)
         dialog.user_agent.setText(self.nominatim_user_agent)
-        
         if dialog.exec():
             self.grouping_mode = dialog.grouping_mode.currentText()
             self.cluster_distance = dialog.cluster_distance.value()
@@ -314,10 +331,12 @@ class PhotoMapApp(QMainWindow):
     def select_and_load_root_folder(self):
         folder_path = QFileDialog.getExistingDirectory(self, "Foto-Hauptordner auswählen")
         if not folder_path: return
-        
         self.photo_root_path = folder_path
         self.setWindowTitle(f"Photo Map Viewer v{APP_VERSION} - [{self.photo_root_path}]")
-        
+        self.clear_all_views(is_startup=True)
+        QTimer.singleShot(200, self._delayed_load_and_update)
+
+    def _delayed_load_and_update(self):
         self.check_and_update_folders()
         self.load_data_and_display_ui()
 
@@ -325,12 +344,7 @@ class PhotoMapApp(QMainWindow):
         start_dir = self.photo_root_path if self.photo_root_path else ""
         folder_path = QFileDialog.getExistingDirectory(self, "Zu analysierenden Unterordner auswählen", start_dir)
         if folder_path:
-            if self.photo_root_path and not folder_path.startswith(self.photo_root_path):
-                QMessageBox.warning(self, "Falscher Ordner", "Bitte einen Ordner innerhalb des geladenen Hauptordners auswählen.")
-                return
-            
-            self.process_image_folder(folder_path)
-            
+            self.process_intelligent(folder_path)
             if self.photo_root_path:
                 self.load_data_and_display_ui()
 
@@ -338,7 +352,6 @@ class PhotoMapApp(QMainWindow):
         if not self.photo_root_path:
             QMessageBox.warning(self, "Kein Ordner", "Bitte zuerst einen Foto-Hauptordner laden.")
             return
-
         reply = QMessageBox.question(self, "Cache neu erstellen?", 
                                      f"Soll der Gesamt-Cache ('{APP_CACHE_FILENAME}') wirklich neu erstellt werden? Dies kann je nach Anzahl der Fotos dauern.",
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
@@ -356,362 +369,56 @@ class PhotoMapApp(QMainWindow):
 
     def check_and_update_folders(self):
         if not self.photo_root_path: return
-        
-        folders_to_update = self._find_folders_to_update()
-        
+        folders_to_update = find_csv_targets(self.photo_root_path)
+        folders_to_update = [t for t in folders_to_update if not os.path.exists(os.path.join(t[0], CSV_CACHE_FILENAME))]
         if not folders_to_update:
             return
-            
         msg_box = QMessageBox()
         msg_box.setIcon(QMessageBox.Icon.Question)
         msg_box.setText("Analyse erforderlich")
         msg_box.setInformativeText(f"Es wurde(n) {len(folders_to_update)} Ordner mit neuen Fotos oder veralteten Daten gefunden. Sollen diese jetzt analysiert/aktualisiert werden?")
         msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
-        
         if msg_box.exec() == QMessageBox.StandardButton.Yes:
-            for folder in folders_to_update:
-                self.process_image_folder(folder)
-    
-    def _find_folders_to_update(self):
-        folders_needing_update = []
-        try:
-            for item in os.listdir(self.photo_root_path):
-                dir_path = os.path.join(self.photo_root_path, item)
-                if os.path.isdir(dir_path):
-                    try:
-                        has_images = any(f.lower().endswith(SUPPORTED_EXTENSIONS) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)))
-                        if not has_images: continue
-                    except OSError:
-                        continue 
+            progress = QProgressDialog("Analysiere Ordner...", "Abbrechen", 0, len(folders_to_update), self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            for idx, (folder, mode) in enumerate(folders_to_update):
+                progress.setValue(idx)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    break
+                self.process_intelligent(folder, mode, parent_progress=progress)
+            progress.setValue(len(folders_to_update))
 
-                    csv_path = os.path.join(dir_path, CSV_CACHE_FILENAME)
-                    if not os.path.exists(csv_path):
-                        folders_needing_update.append(dir_path)
-                    else:
-                        try:
-                            with open(csv_path, 'r', newline='', encoding='utf-8') as f:
-                                reader = csv.reader(f)
-                                header = next(reader, None)
-                                if 'datetime_original' not in header:
-                                    folders_needing_update.append(dir_path)
-                        except Exception:
-                            folders_needing_update.append(dir_path)
-        except Exception as e:
-            logging.error("Fehler beim Suchen nach zu aktualisierenden Ordnern", exc_info=True)
-        return folders_needing_update
-
-    def load_data_and_display_ui(self):
-        if not self.photo_root_path:
-            self.clear_all_views(is_startup=True)
+    def process_intelligent(self, folder, mode=None, parent_progress=None):
+        """
+        Analysiert einen Ordner entsprechend der intelligenten Logik.
+        """
+        if mode is None:
+            targets = find_csv_targets(folder)
+            for f, m in targets:
+                self.process_intelligent(f, m, parent_progress=parent_progress)
             return
-
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        
-        try:
-            cache_path = os.path.join(self.photo_root_path, APP_CACHE_FILENAME)
-            manifest_path = os.path.join(self.photo_root_path, MANIFEST_FILENAME)
-            
-            found_csvs = { os.path.join(root, CSV_CACHE_FILENAME): os.path.getmtime(os.path.join(root, CSV_CACHE_FILENAME))
-                          for root, _, files in os.walk(self.photo_root_path) if CSV_CACHE_FILENAME in files }
-            
-            rebuild_cache = True
-            if os.path.exists(cache_path) and os.path.exists(manifest_path):
-                try:
-                    with open(manifest_path, 'r') as f: manifest_data = json.load(f)
-                    if all(p in manifest_data and manifest_data[p] == mt for p, mt in found_csvs.items()) and \
-                       all(p in found_csvs for p in manifest_data.keys()):
-                        self.master_df = pd.read_parquet(cache_path)
-                        rebuild_cache = False
-                except Exception:
-                    logging.warning("Manifest-Datei konnte nicht gelesen werden, Cache wird neu gebaut.", exc_info=True)
-
-            if rebuild_cache:
-                logging.info("Gesamt-Cache wird neu erstellt.")
-                all_dfs = []
-                for csv_path in found_csvs:
-                    try:
-                        df = pd.read_csv(csv_path, keep_default_na=False)
-                        csv_dir = os.path.dirname(csv_path)
-                        df['SourceFolder'] = os.path.relpath(csv_dir, self.photo_root_path)
-                        df['filepath'] = df['filepath'].apply(lambda p: os.path.join(csv_dir, p))
-                        all_dfs.append(df)
-                    except Exception:
-                        logging.error(f"Fehler beim Lesen der CSV-Datei: {csv_path}", exc_info=True)
-                
-                if all_dfs:
-                    self.master_df = pd.concat(all_dfs, ignore_index=True)
-                    # --- START of the fix ---
-                    # Datentypen VOR dem Speichern bereinigen
-                    if 'latitude' in self.master_df.columns:
-                        self.master_df['latitude'] = pd.to_numeric(self.master_df['latitude'], errors='coerce')
-                    if 'longitude' in self.master_df.columns:
-                        self.master_df['longitude'] = pd.to_numeric(self.master_df['longitude'], errors='coerce')
-                    if 'datetime_original' in self.master_df.columns:
-                        self.master_df['datetime_original'] = pd.to_datetime(self.master_df['datetime_original'], errors='coerce', format='%Y:%m:%d %H:%M:%S')
-                    
-                    self.master_df.to_parquet(cache_path)
-                    # --- END of the fix ---
-                    with open(manifest_path, 'w') as f: json.dump(found_csvs, f)
-                else:
-                    self.master_df = pd.DataFrame()
-            
-            if not self.master_df.empty:
-                # Sicherstellen, dass die Typen auch korrekt sind, wenn aus dem Cache geladen wird
-                if 'latitude' in self.master_df.columns:
-                    self.master_df['latitude'] = pd.to_numeric(self.master_df['latitude'], errors='coerce')
-                if 'longitude' in self.master_df.columns:
-                    self.master_df['longitude'] = pd.to_numeric(self.master_df['longitude'], errors='coerce')
-                if 'datetime_original' in self.master_df.columns and not pd.api.types.is_datetime64_any_dtype(self.master_df['datetime_original']):
-                     self.master_df['datetime_original'] = pd.to_datetime(self.master_df['datetime_original'], errors='coerce')
-
-            self.populate_folder_list()
-        
-        except Exception as e:
-            logging.critical("Kritischer Fehler beim Laden der Daten", exc_info=True)
-            QMessageBox.critical(self, "Fehler beim Laden", f"Ein Fehler ist beim Laden der Daten aufgetreten. Details in 'error.log'.\n\n{e}")
-            self.master_df = pd.DataFrame()
-            self.populate_folder_list()
-        finally:
-            QApplication.restoreOverrideCursor()
-
-    def populate_folder_list(self):
-        try:
-            for button in self.folder_button_group.buttons():
-                self.folder_button_group.removeButton(button); button.deleteLater()
-
-            if self.master_df.empty:
-                self.folder_label.hide(); self.scroll_area.hide()
-                return
-
-            self.folder_label.show(); self.scroll_area.show()
-            
-            df_for_list = self.master_df.copy()
-            
-            group_counts = None
-            if self.grouping_mode == "Ordner":
-                group_counts = df_for_list.groupby('SourceFolder').size()
-            else:
-                if 'datetime_original' not in df_for_list.columns or df_for_list['datetime_original'].isnull().all():
-                     QMessageBox.warning(self, "Fehlende Daten", "Für die Gruppierung nach Datum müssen die Ordner neu analysiert werden, um die Aufnahmedaten zu erfassen.")
-                     group_counts = df_for_list.groupby('SourceFolder').size()
-                else:
-                    df_with_date = df_for_list.dropna(subset=['datetime_original']).copy()
-                    
-                    if self.grouping_mode == "Jahr":
-                        df_with_date['group'] = df_with_date['SourceFolder'] + " / " + df_with_date['datetime_original'].dt.year.astype(int).astype(str)
-                    elif self.grouping_mode == "Jahr & Monat":
-                        df_with_date['group'] = df_with_date['SourceFolder'] + " / " + df_with_date['datetime_original'].dt.strftime('%Y-%m')
-                    
-                    group_counts = df_with_date.groupby('group').size()
-
-            group_counts = group_counts.sort_index()
-
-            for group_name, count in group_counts.items():
-                label = f"{group_name} ({count})"
-                radio_button = QRadioButton(label)
-                self.radio_button_layout.addWidget(radio_button)
-                self.folder_button_group.addButton(radio_button)
-            
-            if self.folder_button_group.buttons():
-                self.folder_button_group.buttons()[0].setChecked(True)
-                self.on_folder_selected(self.folder_button_group.buttons()[0])
-            else:
-                self.clear_all_views()
-        except Exception as e:
-            logging.critical("Fehler beim Erstellen der Ordnerliste", exc_info=True)
-            QMessageBox.critical(self, "UI Fehler", f"Ein Fehler ist beim Erstellen der Ordnerliste aufgetreten. Details in 'error.log'.\n\n{e}")
-
-    def on_folder_selected(self, selected_button):
-        try:
-            full_label = selected_button.text()
-            virtual_folder = re.sub(r'\s\(\d+\)$', '', full_label)
-
-            if not virtual_folder or self.master_df.empty:
-                return
-
-            df_to_display = self.master_df.copy()
-            
-            if self.grouping_mode == "Ordner":
-                df_to_display = df_to_display[df_to_display['SourceFolder'] == virtual_folder]
-            else:
-                parts = virtual_folder.rsplit(" / ", 1)
-                if len(parts) != 2:
-                    logging.warning(f"Konnte den virtuellen Ordner nicht aufteilen: {virtual_folder}")
-                    return
-                
-                source_folder, date_part = parts
-                
-                df_to_display = df_to_display[df_to_display['SourceFolder'] == source_folder]
-                
-                if self.grouping_mode == "Jahr":
-                    df_to_display = df_to_display[df_to_display['datetime_original'].dt.year == int(date_part)]
-                elif self.grouping_mode == "Jahr & Monat":
-                    df_to_display = df_to_display[df_to_display['datetime_original'].dt.strftime('%Y-%m') == date_part]
-
-            self.display_map_from_dataframe(df_to_display)
-        except Exception as e:
-            logging.error("Fehler bei der Auswahl einer Gruppe", exc_info=True)
-            QMessageBox.warning(self, "Filter Fehler", f"Beim Filtern der Fotos ist ein Fehler aufgetreten. Details in 'error.log'.\n\n{e}")
-
-    def display_map_from_dataframe(self, df):
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        self.sidebar_label.setText("Kein Cluster ausgewählt")
-        self.photo_list_widget.clear()
-        self.preview_label.clear(); self.preview_label.setText("")
-        
-        df_clean = df.copy().dropna(subset=['latitude', 'longitude', 'filepath'])
-        if df_clean.empty:
-            self.web_view.setHtml("<html><body>Keine Fotos mit GPS-Daten in dieser Gruppe gefunden.</body></html>")
-            QApplication.restoreOverrideCursor(); return
-        
-        self._perform_clustering(df_clean)
-        
-        if not self.clusters_data:
-            self.web_view.setHtml("<html><body>Keine Cluster gebildet.</body></html>")
-            QApplication.restoreOverrideCursor(); return
-
-        map_center = [self.clusters_data[0]['centroid_lat'], self.clusters_data[0]['centroid_lon']]
-        m = folium.Map(location=map_center, zoom_start=10)
-
-        for cluster in self.clusters_data:
-            count_text = f"{cluster['photo_count']} Foto(s)"
-            popup_html = f"<div style='font-family: sans-serif;'><a href='app://show_cluster?id={cluster['id']}' style='text-decoration:none; color:black;'>{html.escape(count_text)}</a></div>"
-            folium.Marker(location=[cluster['centroid_lat'], cluster['centroid_lon']],
-                          popup=folium.Popup(popup_html, max_width=300),
-                          tooltip=count_text).add_to(m)
-
-        data = io.BytesIO(); m.save(data, close_file=False)
-        self.web_view.setHtml(data.getvalue().decode())
-        QApplication.restoreOverrideCursor()
-
-    def _perform_clustering(self, df):
-        self.clusters_data.clear()
-        processed_indices = set()
-        df_reset = df.reset_index(drop=True)
-        for i, point1 in df_reset.iterrows():
-            if i in processed_indices: continue
-            
-            cluster_points = [{'filepath': point1['filepath'], 'latitude': point1['latitude'], 'longitude': point1['longitude']}]
-            processed_indices.add(i)
-            sum_lat, sum_lon = point1['latitude'], point1['longitude']
-            
-            for j, point2 in df_reset.iloc[i+1:].iterrows():
-                if j in processed_indices: continue
-                if haversine(point1['latitude'], point1['longitude'], point2['latitude'], point2['longitude']) <= self.cluster_distance:
-                    cluster_points.append({'filepath': point2['filepath'], 'latitude': point2['latitude'], 'longitude': point2['longitude']})
-                    processed_indices.add(j)
-                    sum_lat += point2['latitude']; sum_lon += point2['longitude']
-            
-            count = len(cluster_points)
-            self.clusters_data.append({ 'id': len(self.clusters_data), 'points': cluster_points,
-                'centroid_lat': sum_lat / count, 'centroid_lon': sum_lon / count, 'photo_count': count })
-
-    def display_photos_for_cluster(self, cluster_id_str):
-        try:
-            cluster_id = int(cluster_id_str)
-            cluster = next((c for c in self.clusters_data if c['id'] == cluster_id), None)
-            if cluster:
-                self.sidebar_label.setText(f"Cluster mit {cluster['photo_count']} Foto(s)")
-                self.photo_list_widget.clear()
-                for point in cluster['points']:
-                    item = QListWidgetItem(os.path.basename(point['filepath']))
-                    item.setData(Qt.ItemDataRole.UserRole, point['filepath'])
-                    self.photo_list_widget.addItem(item)
-                if self.photo_list_widget.count() > 0:
-                     self.photo_list_widget.setCurrentRow(0)
-                     self.display_preview(self.photo_list_widget.item(0))
-        except (ValueError, TypeError) as e:
-            logging.warning("Fehler bei der Cluster-Auswahl", exc_info=True)
-
-    def display_preview(self, item):
-        if not item:
-            self.preview_label.clear(); self.preview_label.setText("")
-            return
-        
-        filepath = item.data(Qt.ItemDataRole.UserRole)
-        if filepath and os.path.exists(filepath):
-            try:
-                pil_image = Image.open(filepath)
-                pil_image_oriented = ImageOps.exif_transpose(pil_image)
-                pil_image_rgba = pil_image_oriented.convert("RGBA")
-                data = pil_image_rgba.tobytes("raw", "RGBA")
-                qimage = QImage(data, pil_image_rgba.width, pil_image_rgba.height, QImage.Format.Format_RGBA8888)
-                pixmap = QPixmap.fromImage(qimage)
-                
-                if pixmap.isNull():
-                    self.preview_label.setText("Vorschau nicht verfügbar")
-                    return
-                scaled_pixmap = pixmap.scaled(self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                self.preview_label.setPixmap(scaled_pixmap)
-            except Exception as e:
-                self.preview_label.clear()
-                self.preview_label.setText("Fehler beim Laden")
-                logging.warning(f"Vorschau-Fehler für {filepath}", exc_info=True)
-        else:
-            self.preview_label.clear()
-            self.preview_label.setText("Bildpfad ungültig.")
-
-    def open_photo_from_sidebar(self, item):
-        filepath = item.data(Qt.ItemDataRole.UserRole)
-        if filepath and os.path.exists(filepath):
-            try: os.startfile(filepath)
-            except Exception as e: QMessageBox.warning(self, "Fehler", f"Datei konnte nicht geöffnet werden:\n{e}")
-
-    def clear_all_views(self, is_startup=False):
-        self.master_df = pd.DataFrame()
-        self.populate_folder_list()
-        
-        if is_startup:
-            m = folium.Map(location=[51.1657, 10.4515], zoom_start=6, tiles="CartoDB positron")
-            html_text = """
-            <div style="font-family: Arial; color: #333; font-size: 16px; text-align: center; border: 2px solid #555; background-color: rgba(255,255,255,0.75); padding: 10px; border-radius: 5px; box-shadow: 3px 3px 5px rgba(0,0,0,0.3);">
-                <b>Willkommen beim Photo Map Viewer!</b><br>
-                Bitte laden Sie einen Ordner über das Menü<br>
-                <i>Datei &rarr; Foto-Hauptordner laden...</i>
-            </div>
-            """
-            folium.Marker(
-                location=[51.3, 10.45],
-                icon=folium.features.DivIcon(icon_size=(350,100), icon_anchor=(175,50), html=html_text)
-            ).add_to(m)
-            data = io.BytesIO(); m.save(data, close_file=False)
-            self.web_view.setHtml(data.getvalue().decode())
-        
-        self.sidebar_label.setText("")
-        self.photo_list_widget.clear()
-        self.preview_label.clear()
-        self.preview_label.setText("")
-
-    def process_image_folder(self, folder_path):
-        cache_file_path = os.path.join(folder_path, CSV_CACHE_FILENAME)
+        cache_file_path = os.path.join(folder, CSV_CACHE_FILENAME)
         cached_data = self._load_csv_cache(cache_file_path)
-        
         all_file_data = cached_data.copy()
-        image_files = [os.path.join(r, f) for r, _, fs in os.walk(folder_path) for f in fs if f.lower().endswith(SUPPORTED_EXTENSIONS)]
-        
+        image_files = get_images_for_csv(folder, mode)
         if not image_files:
-            QMessageBox.information(self, "Keine Bilder", f"Keine unterstützten Bilddateien in {os.path.basename(folder_path)} gefunden.")
             return
-
-        progress = QProgressDialog(f"Analysiere '{os.path.basename(folder_path)}'...", "Abbrechen", 0, len(image_files), self)
+        progress = QProgressDialog(f"Analysiere '{os.path.basename(folder)}'...", "Abbrechen", 0, len(image_files), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         self.nominatim_api_cache.clear()
-
-        for i, image_path in enumerate(image_files):
-            progress.setValue(i); QApplication.processEvents()
-            if progress.wasCanceled(): break
-            
-            relative_path = os.path.relpath(image_path, folder_path)
-            progress.setLabelText(f"Verarbeite: {os.path.basename(image_path)}")
-            
-            if relative_path in all_file_data and all_file_data[relative_path].get('datetime_original'):
+        for i, (rel_path, abs_path) in enumerate(image_files):
+            progress.setValue(i)
+            QApplication.processEvents()
+            if progress.wasCanceled() or (parent_progress and parent_progress.wasCanceled()):
+                break
+            progress.setLabelText(f"Verarbeite: {rel_path}")
+            if rel_path in all_file_data and all_file_data[rel_path].get('datetime_original'):
                 continue
-
-            exif = extract_exif_data(image_path)
+            exif = extract_exif_data(abs_path)
             lat, lon, dt = exif['lat'], exif['lon'], exif['datetime']
-            
-            if relative_path not in all_file_data or not all_file_data[relative_path].get('country'):
+            if rel_path not in all_file_data or not all_file_data[rel_path].get('country'):
                 if lat is not None and lon is not None:
                     nominatim_key = (round(lat, 2), round(lon, 2))
                     if nominatim_key in self.nominatim_api_cache:
@@ -720,13 +427,11 @@ class PhotoMapApp(QMainWindow):
                         country, city = fetch_location_from_nominatim(lat, lon, self.nominatim_user_agent)
                         self.nominatim_api_cache[nominatim_key] = (country, city)
                         time.sleep(1.1)
-                    
-                    all_file_data[relative_path] = {"lat": lat, "lon": lon, "country": country, "city": city, "datetime": dt}
+                    all_file_data[rel_path] = {"lat": lat, "lon": lon, "country": country, "city": city, "datetime": dt}
                 else:
-                    all_file_data[relative_path] = {"lat": None, "lon": None, "country": None, "city": None, "datetime": dt}
+                    all_file_data[rel_path] = {"lat": None, "lon": None, "country": None, "city": None, "datetime": dt}
             else:
-                all_file_data[relative_path]['datetime_original'] = dt
-
+                all_file_data[rel_path]['datetime_original'] = dt
         progress.setValue(len(image_files))
         if not progress.wasCanceled():
             self._save_csv_cache(cache_file_path, all_file_data)
@@ -766,15 +471,258 @@ class PhotoMapApp(QMainWindow):
         except Exception as e:
             logging.error(f"Fehler beim Speichern des CSV-Cache: {cache_file_path}", exc_info=True)
 
+    def load_data_and_display_ui(self):
+        if not self.photo_root_path:
+            self.clear_all_views(is_startup=True)
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            cache_path = os.path.join(self.photo_root_path, APP_CACHE_FILENAME)
+            manifest_path = os.path.join(self.photo_root_path, MANIFEST_FILENAME)
+            found_csvs = {
+                os.path.join(root, CSV_CACHE_FILENAME): os.path.getmtime(os.path.join(root, CSV_CACHE_FILENAME))
+                for root, dirs, files in os.walk(self.photo_root_path, topdown=True)
+                if CSV_CACHE_FILENAME in files
+            }
+            rebuild_cache = True
+            if os.path.exists(cache_path) and os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, 'r') as f: manifest_data = json.load(f)
+                    if all(p in manifest_data and manifest_data[p] == mt for p, mt in found_csvs.items()) and \
+                       all(p in found_csvs for p in manifest_data.keys()):
+                        self.master_df = pd.read_parquet(cache_path)
+                        rebuild_cache = False
+                except Exception:
+                    logging.warning("Manifest-Datei konnte nicht gelesen werden, Cache wird neu gebaut.", exc_info=True)
+            if rebuild_cache:
+                logging.info("Gesamt-Cache wird neu erstellt.")
+                all_dfs = []
+                for csv_path in found_csvs:
+                    try:
+                        df = pd.read_csv(csv_path, keep_default_na=False)
+                        ordner_dir = os.path.dirname(csv_path)
+                        df['SourceFolder'] = os.path.relpath(ordner_dir, self.photo_root_path)
+                        df['filepath'] = df['filepath'].apply(lambda p: os.path.join(ordner_dir, p))
+                        all_dfs.append(df)
+                    except Exception:
+                        logging.error(f"Fehler beim Lesen der CSV-Datei: {csv_path}", exc_info=True)
+                if all_dfs:
+                    self.master_df = pd.concat(all_dfs, ignore_index=True)
+                    if 'latitude' in self.master_df.columns:
+                        self.master_df['latitude'] = pd.to_numeric(self.master_df['latitude'], errors='coerce')
+                    if 'longitude' in self.master_df.columns:
+                        self.master_df['longitude'] = pd.to_numeric(self.master_df['longitude'], errors='coerce')
+                    if 'datetime_original' in self.master_df.columns:
+                        self.master_df['datetime_original'] = pd.to_datetime(self.master_df['datetime_original'], errors='coerce', format='%Y:%m:%d %H:%M:%S')
+                    self.master_df.to_parquet(cache_path)
+                    with open(manifest_path, 'w') as f: json.dump(found_csvs, f)
+                else:
+                    self.master_df = pd.DataFrame()
+            if not self.master_df.empty:
+                if 'latitude' in self.master_df.columns:
+                    self.master_df['latitude'] = pd.to_numeric(self.master_df['latitude'], errors='coerce')
+                if 'longitude' in self.master_df.columns:
+                    self.master_df['longitude'] = pd.to_numeric(self.master_df['longitude'], errors='coerce')
+                if 'datetime_original' in self.master_df.columns and not pd.api.types.is_datetime64_any_dtype(self.master_df['datetime_original']):
+                     self.master_df['datetime_original'] = pd.to_datetime(self.master_df['datetime_original'], errors='coerce')
+            self.populate_folder_list()
+        except Exception as e:
+            logging.critical("Kritischer Fehler beim Laden der Daten", exc_info=True)
+            QMessageBox.critical(self, "Fehler beim Laden", f"Ein Fehler ist beim Laden der Daten aufgetreten. Details in 'error.log'.\n\n{e}")
+            self.master_df = pd.DataFrame()
+            self.populate_folder_list()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def populate_folder_list(self):
+        try:
+            for button in self.folder_button_group.buttons():
+                self.folder_button_group.removeButton(button); button.deleteLater()
+            if self.master_df.empty:
+                self.folder_label.hide(); self.scroll_area.hide()
+                return
+            self.folder_label.show(); self.scroll_area.show()
+            df_for_list = self.master_df.copy()
+            df_for_list = df_for_list.dropna(subset=['latitude', 'longitude'])
+            group_counts = None
+            if self.grouping_mode == "Ordner":
+                group_counts = df_for_list.groupby('SourceFolder').size()
+            else:
+                if 'datetime_original' not in df_for_list.columns or df_for_list['datetime_original'].isnull().all():
+                     QMessageBox.warning(self, "Fehlende Daten", "Für die Gruppierung nach Datum müssen die Ordner neu analysiert werden, um die Aufnahmedaten zu erfassen.")
+                     group_counts = df_for_list.groupby('SourceFolder').size()
+                else:
+                    df_with_date = df_for_list.dropna(subset=['datetime_original']).copy()
+                    if self.grouping_mode == "Jahr":
+                        df_with_date['group'] = df_with_date['SourceFolder'] + " / " + df_with_date['datetime_original'].dt.year.astype(int).astype(str)
+                    elif self.grouping_mode == "Jahr & Monat":
+                        df_with_date['group'] = df_with_date['SourceFolder'] + " / " + df_with_date['datetime_original'].dt.strftime('%Y-%m')
+                    group_counts = df_with_date.groupby('group').size()
+            group_counts = group_counts.sort_index()
+            for group_name, count in group_counts.items():
+                label = f"{group_name} ({count})"
+                radio_button = QRadioButton(label)
+                self.radio_button_layout.addWidget(radio_button)
+                self.folder_button_group.addButton(radio_button)
+            if self.folder_button_group.buttons():
+                self.folder_button_group.buttons()[0].setChecked(True)
+                self.on_folder_selected(self.folder_button_group.buttons()[0])
+            else:
+                self.clear_all_views()
+        except Exception as e:
+            logging.critical("Fehler beim Erstellen der Ordnerliste", exc_info=True)
+            QMessageBox.critical(self, "UI Fehler", f"Ein Fehler ist beim Erstellen der Ordnerliste aufgetreten. Details in 'error.log'.\n\n{e}")
+
+    def on_folder_selected(self, selected_button):
+        try:
+            full_label = selected_button.text()
+            virtual_folder = re.sub(r'\s\(\d+\)$', '', full_label)
+            if not virtual_folder or self.master_df.empty:
+                return
+            df_to_display = self.master_df.copy()
+            df_to_display = df_to_display.dropna(subset=['latitude', 'longitude'])
+            if self.grouping_mode == "Ordner":
+                df_to_display = df_to_display[df_to_display['SourceFolder'] == virtual_folder]
+            else:
+                parts = virtual_folder.rsplit(" / ", 1)
+                if len(parts) != 2:
+                    logging.warning(f"Konnte den virtuellen Ordner nicht aufteilen: {virtual_folder}")
+                    return
+                source_folder, date_part = parts
+                df_to_display = df_to_display[df_to_display['SourceFolder'] == source_folder]
+                if self.grouping_mode == "Jahr":
+                    df_to_display = df_to_display[df_to_display['datetime_original'].dt.year == int(date_part)]
+                elif self.grouping_mode == "Jahr & Monat":
+                    df_to_display = df_to_display[df_to_display['datetime_original'].dt.strftime('%Y-%m') == date_part]
+            self.display_map_from_dataframe(df_to_display)
+        except Exception as e:
+            logging.error("Fehler bei der Auswahl einer Gruppe", exc_info=True)
+            QMessageBox.warning(self, "Filter Fehler", f"Beim Filtern der Fotos ist ein Fehler aufgetreten. Details in 'error.log'.\n\n{e}")
+
+    def display_map_from_dataframe(self, df):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        self.sidebar_label.setText("Kein Cluster ausgewählt")
+        self.photo_list_widget.clear()
+        self.preview_label.clear(); self.preview_label.setText("")
+        df_clean = df.copy().dropna(subset=['latitude', 'longitude', 'filepath'])
+        if df_clean.empty:
+            self.web_view.setHtml("<html><body>Keine Fotos mit GPS-Daten in dieser Gruppe gefunden.</body></html>")
+            QApplication.restoreOverrideCursor(); return
+        self._perform_clustering(df_clean)
+        if not self.clusters_data:
+            self.web_view.setHtml("<html><body>Keine Cluster gebildet.</body></html>")
+            QApplication.restoreOverrideCursor(); return
+        map_center = [self.clusters_data[0]['centroid_lat'], self.clusters_data[0]['centroid_lon']]
+        m = folium.Map(location=map_center, zoom_start=10)
+        for cluster in self.clusters_data:
+            count_text = f"{cluster['photo_count']} Foto(s)"
+            popup_html = f"<div style='font-family: sans-serif;'><a href='app://show_cluster?id={cluster['id']}' style='text-decoration:none; color:black;'>{html.escape(count_text)}</a></div>"
+            folium.Marker(location=[cluster['centroid_lat'], cluster['centroid_lon']],
+                          popup=folium.Popup(popup_html, max_width=300),
+                          tooltip=count_text).add_to(m)
+        data = io.BytesIO(); m.save(data, close_file=False)
+        self.web_view.setHtml(data.getvalue().decode())
+        QApplication.restoreOverrideCursor()
+
+    def _perform_clustering(self, df):
+        self.clusters_data.clear()
+        processed_indices = set()
+        df_reset = df.reset_index(drop=True)
+        for i, point1 in df_reset.iterrows():
+            if i in processed_indices: continue
+            cluster_points = [{'filepath': point1['filepath'], 'latitude': point1['latitude'], 'longitude': point1['longitude']}]
+            processed_indices.add(i)
+            sum_lat, sum_lon = point1['latitude'], point1['longitude']
+            for j, point2 in df_reset.iloc[i+1:].iterrows():
+                if j in processed_indices: continue
+                if haversine(point1['latitude'], point1['longitude'], point2['latitude'], point2['longitude']) <= self.cluster_distance:
+                    cluster_points.append({'filepath': point2['filepath'], 'latitude': point2['latitude'], 'longitude': point2['longitude']})
+                    processed_indices.add(j)
+                    sum_lat += point2['latitude']; sum_lon += point2['longitude']
+            count = len(cluster_points)
+            self.clusters_data.append({ 'id': len(self.clusters_data), 'points': cluster_points,
+                'centroid_lat': sum_lat / count, 'centroid_lon': sum_lon / count, 'photo_count': count })
+
+    def display_photos_for_cluster(self, cluster_id_str):
+        try:
+            cluster_id = int(cluster_id_str)
+            cluster = next((c for c in self.clusters_data if c['id'] == cluster_id), None)
+            if cluster:
+                self.sidebar_label.setText(f"Cluster mit {cluster['photo_count']} Foto(s)")
+                self.photo_list_widget.clear()
+                for point in cluster['points']:
+                    item = QListWidgetItem(os.path.basename(point['filepath']))
+                    item.setData(Qt.ItemDataRole.UserRole, point['filepath'])
+                    self.photo_list_widget.addItem(item)
+                if self.photo_list_widget.count() > 0:
+                     self.photo_list_widget.setCurrentRow(0)
+                     self.display_preview(self.photo_list_widget.item(0))
+        except (ValueError, TypeError) as e:
+            logging.warning("Fehler bei der Cluster-Auswahl", exc_info=True)
+
+    def display_preview(self, item):
+        if not item:
+            self.preview_label.clear(); self.preview_label.setText("")
+            return
+        filepath = item.data(Qt.ItemDataRole.UserRole)
+        if filepath and os.path.exists(filepath):
+            try:
+                pil_image = Image.open(filepath)
+                pil_image_oriented = ImageOps.exif_transpose(pil_image)
+                pil_image_rgba = pil_image_oriented.convert("RGBA")
+                data = pil_image_rgba.tobytes("raw", "RGBA")
+                qimage = QImage(data, pil_image_rgba.width, pil_image_rgba.height, QImage.Format.Format_RGBA8888)
+                pixmap = QPixmap.fromImage(qimage)
+                if pixmap.isNull():
+                    self.preview_label.setText("Vorschau nicht verfügbar")
+                    return
+                scaled_pixmap = pixmap.scaled(self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.preview_label.setPixmap(scaled_pixmap)
+            except Exception as e:
+                self.preview_label.clear()
+                self.preview_label.setText("Fehler beim Laden")
+                logging.warning(f"Vorschau-Fehler für {filepath}", exc_info=True)
+        else:
+            self.preview_label.clear()
+            self.preview_label.setText("Bildpfad ungültig.")
+
+    def open_photo_from_sidebar(self, item):
+        filepath = item.data(Qt.ItemDataRole.UserRole)
+        if filepath and os.path.exists(filepath):
+            try: os.startfile(filepath)
+            except Exception as e: QMessageBox.warning(self, "Fehler", f"Datei konnte nicht geöffnet werden:\n{e}")
+
+    def clear_all_views(self, is_startup=False):
+        self.master_df = pd.DataFrame()
+        self.populate_folder_list()
+        if is_startup:
+            m = folium.Map(location=[51.1657, 10.4515], zoom_start=6, tiles="CartoDB positron")
+            html_text = f"""
+            <div style="font-family: Arial; color: #333; font-size: 16px; text-align: center; border: 2px solid #555; background-color: rgba(255,255,255,0.75); padding: 10px; border-radius: 5px;">
+                <b>Willkommen beim Photo Map Viewer!</b><br><br>
+                <span style='font-size:14px'>Bitte laden Sie einen Ordner über das Menü<br>
+                <i>Datei &rarr; Foto-Hauptordner laden...</i></span>
+                <br><br>
+                {f"<span style='color:#888'>Aktueller Hauptordner:<br>{html.escape(self.photo_root_path) if self.photo_root_path else '(Keiner geladen)'}</span>"}
+            </div>
+            """
+            folium.Marker(
+                location=[51.3, 10.45],
+                icon=folium.features.DivIcon(icon_size=(350,100), icon_anchor=(175,50), html=html_text)
+            ).add_to(m)
+            data = io.BytesIO(); m.save(data, close_file=False)
+            self.web_view.setHtml(data.getvalue().decode())
+        self.sidebar_label.setText("")
+        self.photo_list_widget.clear()
+        self.preview_label.clear()
+        self.preview_label.setText("")
+
 if __name__ == '__main__':
     setup_logging()
     sys.excepthook = uncaught_exception_handler
-    
     app = QApplication(sys.argv)
     QCoreApplication.setOrganizationName("niederwe75")
     QCoreApplication.setApplicationName("PhotoMapTool")
-    
     main_window = PhotoMapApp()
     main_window.show()
-    
     sys.exit(app.exec())
