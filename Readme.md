@@ -1,4 +1,4 @@
-# **Photo Map Tool v1.2.2**
+# Photo Map Tool v2.1.8
 
 Ein einfaches, aber leistungsstarkes Desktop-Tool zur Visualisierung von Fotos mit GPS-Daten auf einer interaktiven Karte. Das Tool liest EXIF-Daten aus Bilddateien, ruft über Nominatim die entsprechenden Ortsnamen ab und stellt die Fotos als gruppierte Cluster auf einer Karte dar.
 
@@ -8,27 +8,30 @@ Ein einfaches, aber leistungsstarkes Desktop-Tool zur Visualisierung von Fotos m
 
 Die neueste, kompilierte Version für Windows kann direkt von der [**Releases-Seite**](https://github.com/niederwe75/Photo-Map-Tool/releases/latest) heruntergeladen werden.
 
-## **Features**
+## Features
 
-* **Automatische GPS-Extraktion:** Liest Breiten- und Längengrade direkt aus den EXIF-Daten von .jpg, .jpeg, .tiff, .heic und weiteren Formaten.  
-* **Geolokalisierung:** Wandelt GPS-Koordinaten mithilfe der [Nominatim API (OpenStreetMap)](https://nominatim.openstreetmap.org/) in lesbare Ortsnamen (Land, Stadt) um.  
-* **Interaktive Karte:** Zeigt Fotos als klickbare Cluster auf einer Karte an. Ein Klick auf einen Cluster enthüllt die enthaltenen Fotos.  
-* **Effizientes Caching:**  
-  * Ein intelligentes Zwei-Ebenen-Cache-System verhindert unnötige Analysen und API-Abfragen.  
-  * **Level 1:** Pro Unterordner wird eine .csv-Cache-Datei angelegt, die GPS- und Ortsdaten speichert.  
-  * **Level 2:** Eine combined\_geodata.parquet-Datei im Hauptordner fasst alle Daten für einen blitzschnellen Start zusammen.  
-* **Vorschau-Funktion:** Zeigt eine Liste der Fotos im ausgewählten Cluster an und bietet eine Vorschau beim Anklicken.  
-* **Konfigurierbarkeit:** Über einen Einstellungsdialog können wichtige Parameter wie die Cluster-Distanz und der User-Agent angepasst werden.  
-* **Zustandsspeicherung:** Merkt sich die Fenstergröße, \-position und die Aufteilung der Bereiche für den nächsten Start.
+* **Automatische EXIF-Extraktion:** Liest GPS-Koordinaten und das Aufnahmedatum direkt aus den Metadaten von `.jpg`, `.jpeg`, `.tiff`, `.heic` und weiteren Formaten.
+* **Flexible Gruppierung:** Zeigt Fotos wahlweise nach ihrer Ordnerstruktur, nach Aufnahmejahr oder nach Aufnahme-Monat an.
+* **Geolokalisierung:** Wandelt GPS-Koordinaten mithilfe der [Nominatim API (OpenStreetMap)](https://nominatim.openstreetmap.org/) in lesbare Ortsnamen (Land, Stadt) um.
+* **Interaktive Karte:** Zeigt Fotos als klickbare Cluster auf einer Karte an. Ein Klick auf einen Cluster enthüllt die enthaltenen Fotos.
+* **Effizientes Caching:**
+    * Ein intelligentes Zwei-Ebenen-Cache-System verhindert unnötige Analysen und API-Abfragen.
+    * **Level 1:** Pro Unterordner wird eine `.csv`-Cache-Datei angelegt, die GPS-, Orts- und Datums-Daten speichert.
+    * **Level 2:** Eine `combined_geodata.parquet`-Datei im Hauptordner fasst alle Daten für einen blitzschnellen Start zusammen.
+* **Übersichtliche Listen:** Zeigt die Anzahl der Fotos direkt in der Gruppenliste an, z.B. `Photos / 2024 (460)`.
+* **Vorschau-Funktion:** Zeigt eine Liste der Fotos im ausgewählten Cluster an und bietet eine Vorschau beim Anklicken.
+* **Konfigurierbarkeit:** Über einen Einstellungsdialog können wichtige Parameter wie die Gruppierungsart, die Cluster-Distanz und der User-Agent angepasst werden.
+* **Zustandsspeicherung:** Merkt sich die Fenstergröße, -position und die Aufteilung der Bereiche für den nächsten Start.
+* **Fehler-Logging:** Schreibt bei unerwarteten Abstürzen einen detaillierten Bericht in eine `error.log`-Datei zur einfacheren Fehlersuche.
 
-## **Anleitung**
+## Anleitung
 
-1. **Anwendung starten:** Lade die .zip-Datei von der [Releases-Seite](https://github.com/niederwe75/Photo-Map-Tool/releases/latest) herunter, entpacke sie und führe die Photo Map Tool.exe aus.  
-2. **Hauptordner laden:** Gehe im Menü auf Datei \-\> Foto-Hauptordner laden... und wähle das Hauptverzeichnis aus, das deine Foto-Unterordner enthält.  
-3. **Analyse (optional):** Das Tool erkennt automatisch Ordner, die noch nicht analysiert wurden, und fragt, ob es dies tun soll. Alternativ kann eine manuelle Analyse über Datei \-\> Unterordner analysieren... gestartet werden.  
-4. **Ordner auswählen:** Wähle auf der linken Seite einen der gefundenen Unterordner aus. Die Karte wird automatisch mit den Clustern dieses Ordners aktualisiert.  
-5. **Cluster erkunden:** Klicke auf einen der Marker (Cluster) auf der Karte.  
-6. **Fotos ansehen:** Auf der rechten Seite erscheint nun eine Liste aller Fotos in diesem Cluster. Klicke auf einen Dateinamen, um eine Vorschau anzuzeigen. Ein Doppelklick öffnet die Datei im Standard-Bildbetrachter deines Systems.
+1.  **Anwendung starten:** Lade die `.zip`-Datei von der [Releases-Seite](https://github.com/niederwe75/Photo-Map-Tool/releases/latest) herunter, entpacke sie und führe die `Photo Map Tool.exe` aus.
+2.  **Hauptordner laden:** Gehe im Menü auf `Datei` -> `Foto-Hauptordner laden...` und wähle das Hauptverzeichnis aus, das deine Foto-Unterordner enthält.
+3.  **Analyse (optional):** Das Tool erkennt automatisch Ordner, die noch nicht analysiert wurden oder denen Datums-Informationen fehlen, und fragt, ob es diese analysieren soll.
+4.  **Gruppierung auswählen:** Wähle auf der linken Seite eine Gruppe aus. Die Art der Gruppen (nach Ordner, Jahr, etc.) kann unter `Extras` -> `Einstellungen...` geändert werden.
+5.  **Cluster erkunden:** Klicke auf einen der Marker (Cluster) auf der Karte.
+6.  **Fotos ansehen:** Auf der rechten Seite erscheint nun eine Liste aller Fotos in diesem Cluster. Klicke auf einen Dateinamen, um eine Vorschau anzuzeigen. Ein Doppelklick öffnet die Datei im Standard-Bildbetrachter deines Systems.
 
 ## **Installation & Ausführung aus dem Quellcode**
 
@@ -63,18 +66,19 @@ python \-m PyInstaller \--onedir \--windowed \--name="Photo Map Tool" main.py
 
 Die fertige Anwendung findest du im neu erstellten dist/Photo Map Tool-Ordner.
 
-## **Konfiguration**
+## Konfiguration
 
-Unter Extras \-\> Einstellungen... können folgende Parameter angepasst werden:
+Unter `Extras` -> `Einstellungen...` können folgende Parameter angepasst werden:
 
-* **Cluster-Distanz:** Der maximale Radius in Metern, in dem Fotos zu einem einzigen Cluster zusammengefasst werden.  
-* **Nominatim User-Agent:** Der User-Agent, der bei Anfragen an die Nominatim-API gesendet wird. Es ist guter Stil, hier eine Information zu deinem Projekt anzugeben (z.B. "PhotoMapTool/1.2, https://www.google.com/search?q=https://github.com/niederwe75/Photo-Map-Tool").
+* **Gruppieren nach:** Wählt aus, ob die Liste links nach `Ordner`, `Jahr` oder `Jahr & Monat` aufgeteilt wird.
+* **Cluster-Distanz:** Der maximale Radius in Metern, in dem Fotos zu einem einzigen Cluster zusammengefasst werden.
+* **Nominatim User-Agent:** Der User-Agent, der bei Anfragen an die Nominatim-API gesendet wird. Es ist guter Stil, hier eine Information zu deinem Projekt anzugeben (z.B. "PhotoMapTool/2.1, https://github.com/niederwe75/Photo-Map-Tool").
 
-## **Das Cache-System**
+## Das Cache-System
 
-* **.exif\_tool\_cache.csv:** Wird in jedem analysierten Unterordner erstellt. Sie enthält die extrahierten GPS-Daten und die von Nominatim abgerufenen Ortsnamen. Das verhindert, dass bei wiederholten Analysen desselben Ordners erneut API-Anfragen gestellt werden müssen.  
-* **combined\_geodata.parquet & cache\_manifest.json:** Diese Dateien liegen im Foto-Hauptordner. Die .parquet-Datei ist eine binäre, spaltenorientierte und hoch-performante Zusammenfassung aller .csv-Dateien. Sie ermöglicht das fast sofortige Laden aller Daten beim Programmstart. Die .json-Datei prüft, ob sich die .csv-Dateien geändert haben, um zu entscheiden, ob der .parquet-Cache neu gebaut werden muss.  
-* **Gesamt-Cache neu erstellen:** Diese Menüfunktion löscht nur die .parquet- und .json-Dateien und zwingt das Programm, die Daten aus den vorhandenen .csv-Dateien neu zusammenzusetzen. Nützlich, wenn Ordner manuell gelöscht wurden.
+* **`.exif_tool_cache.csv`:** Wird in jedem analysierten Unterordner erstellt. Sie enthält die extrahierten GPS-Daten, das Aufnahmedatum und die von Nominatim abgerufenen Ortsnamen. Das verhindert, dass bei wiederholten Analysen desselben Ordners erneut API-Anfragen gestellt werden müssen.
+* **`combined_geodata.parquet` & `cache_manifest.json`:** Diese Dateien liegen im Foto-Hauptordner. Die `.parquet`-Datei ist eine binäre, spaltenorientierte und hoch-performante Zusammenfassung aller `.csv`-Dateien. Sie ermöglicht das fast sofortige Laden aller Daten beim Programmstart. Die `.json`-Datei prüft, ob sich die `.csv`-Dateien geändert haben, um zu entscheiden, ob der `.parquet`-Cache neu gebaut werden muss.
+* **`Gesamt-Cache neu erstellen`:** Diese Menüfunktion löscht nur die `.parquet`- und `.json`-Dateien und zwingt das Programm, die Daten aus den vorhandenen `.csv`-Dateien neu zusammenzusetzen. Nützlich, wenn Ordner manuell gelöscht wurden oder Cache-Probleme vermutet werden.
 
 ## **Lizenz**
 
