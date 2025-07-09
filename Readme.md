@@ -1,4 +1,4 @@
-# Photo Map Tool v2.1.8
+# Photo Map Tool v2.1.9
 
 Ein einfaches, aber leistungsstarkes Desktop-Tool zur Visualisierung von Fotos mit GPS-Daten auf einer interaktiven Karte. Das Tool liest EXIF-Daten aus Bilddateien, ruft über Nominatim die entsprechenden Ortsnamen ab und stellt die Fotos als gruppierte Cluster auf einer Karte dar.
 
