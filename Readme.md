@@ -2,7 +2,7 @@
 
 Ein einfaches, aber leistungsstarkes Desktop-Tool zur Visualisierung von Fotos mit GPS-Daten auf einer interaktiven Karte. Das Tool liest EXIF-Daten aus Bilddateien, ruft über Nominatim die entsprechenden Ortsnamen ab und stellt die Fotos als gruppierte Cluster auf einer Karte dar.
 
-![Image](https://github.com/user-attachments/assets/ea355d75-795a-4197-a3b6-26e37f4f0889)
+![Image](https://github.com/user-attachments/assets/ed4ebad2-3992-4338-82fc-99869b4dde15)
 
 ## **Download**
 
